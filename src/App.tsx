@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ChangeEvent } from 'react'
+import type { ChangeEvent, PointerEvent, WheelEvent } from 'react'
 import './App.css'
 
 const SIZE_OPTIONS = [1024, 384, 96] as const
 const MAX_FILES = 10
+const ZOOM_MIN = 0.2
+const ZOOM_MAX = 3
+const ZOOM_STEP = 0.08
 
 type PresetSize = (typeof SIZE_OPTIONS)[number]
-type ExportFormat = 'png' | 'jpeg'
+type ExportFormat = 'png' | 'jpeg' | 'webp'
 
 type ImageItem = {
   id: string
@@ -23,6 +26,22 @@ type ImageItem = {
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max)
 
+const getFrameMetrics = (
+  naturalWidth: number,
+  naturalHeight: number,
+  frameSize: number,
+  zoom: number,
+) => {
+  const baseScale = Math.max(frameSize / naturalWidth, frameSize / naturalHeight)
+  const scale = baseScale * zoom
+  const width = naturalWidth * scale
+  const height = naturalHeight * scale
+  const travelX = Math.abs(frameSize - width) / 2
+  const travelY = Math.abs(frameSize - height) / 2
+
+  return { width, height, travelX, travelY }
+}
+
 const readImageDimensions = (src: string) =>
   new Promise<{ width: number; height: number }>((resolve, reject) => {
     const img = new Image()
@@ -33,7 +52,8 @@ const readImageDimensions = (src: string) =>
 
 const buildFileName = (originalName: string, size: PresetSize, format: ExportFormat) => {
   const baseName = originalName.replace(/\.[^.]+$/, '') || 'image'
-  const extension = format === 'png' ? 'png' : 'jpg'
+  const extension =
+    format === 'png' ? 'png' : format === 'webp' ? 'webp' : 'jpg'
   return `${baseName}-${size}x${size}.${extension}`
 }
 
@@ -63,17 +83,27 @@ const exportImage = async (
   const scale = baseScale * item.zoom
   const drawWidth = image.width * scale
   const drawHeight = image.height * scale
-  const extraX = Math.max(0, drawWidth - item.size)
-  const extraY = Math.max(0, drawHeight - item.size)
-  const drawX = (item.size - drawWidth) / 2 - extraX * item.offsetX
-  const drawY = (item.size - drawHeight) / 2 - extraY * item.offsetY
+  const travelX = Math.abs(item.size - drawWidth) / 2
+  const travelY = Math.abs(item.size - drawHeight) / 2
+  const drawX = (item.size - drawWidth) / 2 - travelX * item.offsetX
+  const drawY = (item.size - drawHeight) / 2 - travelY * item.offsetY
 
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
-  ctx.clearRect(0, 0, item.size, item.size)
+  if (format === 'jpeg') {
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, item.size, item.size)
+  } else {
+    ctx.clearRect(0, 0, item.size, item.size)
+  }
   ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight)
 
-  const mimeType = format === 'png' ? 'image/png' : 'image/jpeg'
+  const mimeType =
+    format === 'png'
+      ? 'image/png'
+      : format === 'webp'
+        ? 'image/webp'
+        : 'image/jpeg'
   return canvas.toDataURL(mimeType, quality)
 }
 
@@ -86,6 +116,17 @@ function App() {
   const [isDownloadingAll, setIsDownloadingAll] = useState(false)
   const [error, setError] = useState<string>('')
   const itemsRef = useRef<ImageItem[]>([])
+  const previewFrameRef = useRef<HTMLDivElement | null>(null)
+  const dragStateRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    startOffsetX: number
+    startOffsetY: number
+    frameSize: number
+    travelX: number
+    travelY: number
+  } | null>(null)
   const selectedItem = items.find((item) => item.id === selectedId) ?? items[0] ?? null
 
   useEffect(() => {
@@ -100,6 +141,13 @@ function App() {
 
   const updateItem = (id: string, updater: (item: ImageItem) => ImageItem) => {
     setItems((current) => current.map((item) => (item.id === id ? updater(item) : item)))
+  }
+
+  const adjustZoom = (id: string, delta: number) => {
+    updateItem(id, (item) => ({
+      ...item,
+      zoom: clamp(Number((item.zoom + delta).toFixed(2)), ZOOM_MIN, ZOOM_MAX),
+    }))
   }
 
   const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -198,6 +246,75 @@ function App() {
     }
   }
 
+  const previewFrameSize = selectedItem ? Math.min(selectedItem.size, 420) : 420
+  const previewMetrics = selectedItem
+    ? getFrameMetrics(
+        selectedItem.naturalWidth,
+        selectedItem.naturalHeight,
+        previewFrameSize,
+        selectedItem.zoom,
+      )
+    : null
+
+  const handlePreviewPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (!selectedItem || !previewMetrics || !previewFrameRef.current) {
+      return
+    }
+
+    event.preventDefault()
+    previewFrameRef.current.setPointerCapture(event.pointerId)
+
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startOffsetX: selectedItem.offsetX,
+      startOffsetY: selectedItem.offsetY,
+      frameSize: previewFrameSize,
+      travelX: previewMetrics.travelX,
+      travelY: previewMetrics.travelY,
+    }
+  }
+
+  const handlePreviewPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const dragState = dragStateRef.current
+
+    if (!selectedItem || !dragState || dragState.pointerId !== event.pointerId) {
+      return
+    }
+
+    const deltaX = event.clientX - dragState.startX
+    const deltaY = event.clientY - dragState.startY
+
+    updateItem(selectedItem.id, (item) => ({
+      ...item,
+      offsetX:
+        dragState.travelX > 0
+          ? clamp(dragState.startOffsetX - deltaX / dragState.travelX, -1, 1)
+          : 0,
+      offsetY:
+        dragState.travelY > 0
+          ? clamp(dragState.startOffsetY - deltaY / dragState.travelY, -1, 1)
+          : 0,
+    }))
+  }
+
+  const handlePreviewPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    if (dragStateRef.current?.pointerId === event.pointerId) {
+      dragStateRef.current = null
+      previewFrameRef.current?.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const handlePreviewWheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (!selectedItem) {
+      return
+    }
+
+    event.preventDefault()
+    adjustZoom(selectedItem.id, event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP)
+  }
+
   return (
     <main className="app-shell">
       <section className="hero-panel">
@@ -253,6 +370,7 @@ function App() {
             >
               <option value="png">PNG</option>
               <option value="jpeg">JPG</option>
+              <option value="webp">WEBP</option>
             </select>
           </label>
 
@@ -352,27 +470,41 @@ function App() {
                 </div>
 
                 <div
+                  ref={previewFrameRef}
                   className="preview-frame"
+                  onPointerDown={handlePreviewPointerDown}
+                  onPointerMove={handlePreviewPointerMove}
+                  onPointerUp={handlePreviewPointerUp}
+                  onPointerCancel={handlePreviewPointerUp}
+                  onWheel={handlePreviewWheel}
                   style={{
-                    width: Math.min(selectedItem.size, 420),
-                    height: Math.min(selectedItem.size, 420),
+                    width: previewFrameSize,
+                    height: previewFrameSize,
                   }}
                 >
                   <img
                     src={selectedItem.src}
                     alt={selectedItem.name}
                     style={{
-                      width: `${selectedItem.zoom * 100}%`,
-                      height: `${selectedItem.zoom * 100}%`,
-                      objectPosition: `${50 + selectedItem.offsetX * 50}% ${
-                        50 + selectedItem.offsetY * 50
-                      }%`,
+                      width: previewMetrics?.width,
+                      height: previewMetrics?.height,
+                      left:
+                        previewMetrics
+                          ? (previewFrameSize - previewMetrics.width) / 2 -
+                            previewMetrics.travelX * selectedItem.offsetX
+                          : 0,
+                      top:
+                        previewMetrics
+                          ? (previewFrameSize - previewMetrics.height) / 2 -
+                            previewMetrics.travelY * selectedItem.offsetY
+                          : 0,
                     }}
                   />
                 </div>
 
                 <p className="preview-note">
                   Final export size: {selectedItem.size} x {selectedItem.size}
+                  {' '}| Drag to reposition. Use mouse wheel or zoom buttons to scale.
                 </p>
               </div>
 
@@ -397,60 +529,28 @@ function App() {
 
                 <div className="control-group">
                   <h3>Adjust image framing</h3>
-
-                  <label className="slider-field">
-                    <span>Zoom</span>
-                    <input
-                      type="range"
-                      min="1"
-                      max="3"
-                      step="0.01"
-                      value={selectedItem.zoom}
-                      onChange={(event) =>
-                        updateItem(selectedItem.id, (item) => ({
-                          ...item,
-                          zoom: Number(event.target.value),
-                        }))
-                      }
-                    />
-                    <strong>{selectedItem.zoom.toFixed(2)}x</strong>
-                  </label>
-
-                  <label className="slider-field">
-                    <span>Horizontal</span>
-                    <input
-                      type="range"
-                      min="-1"
-                      max="1"
-                      step="0.01"
-                      value={selectedItem.offsetX}
-                      onChange={(event) =>
-                        updateItem(selectedItem.id, (item) => ({
-                          ...item,
-                          offsetX: clamp(Number(event.target.value), -1, 1),
-                        }))
-                      }
-                    />
-                    <strong>{selectedItem.offsetX.toFixed(2)}</strong>
-                  </label>
-
-                  <label className="slider-field">
-                    <span>Vertical</span>
-                    <input
-                      type="range"
-                      min="-1"
-                      max="1"
-                      step="0.01"
-                      value={selectedItem.offsetY}
-                      onChange={(event) =>
-                        updateItem(selectedItem.id, (item) => ({
-                          ...item,
-                          offsetY: clamp(Number(event.target.value), -1, 1),
-                        }))
-                      }
-                    />
-                    <strong>{selectedItem.offsetY.toFixed(2)}</strong>
-                  </label>
+                  <div className="zoom-toolbar">
+                    <button
+                      className="secondary-button zoom-button"
+                      type="button"
+                      onClick={() => adjustZoom(selectedItem.id, -ZOOM_STEP)}
+                    >
+                      -
+                    </button>
+                    <strong className="zoom-value">{selectedItem.zoom.toFixed(2)}x</strong>
+                    <button
+                      className="secondary-button zoom-button"
+                      type="button"
+                      onClick={() => adjustZoom(selectedItem.id, ZOOM_STEP)}
+                    >
+                      +
+                    </button>
+                  </div>
+                  <p className="gesture-note">
+                    Click and drag inside the preview to move the crop area. Use
+                    the mouse wheel or the zoom buttons to zoom in and out,
+                    including zooming out to fit more of the image inside the square.
+                  </p>
                 </div>
 
                 <div className="control-group">
