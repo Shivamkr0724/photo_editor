@@ -1,0 +1,87 @@
+:root {
+  font-family:
+    'Plus Jakarta Sans', 'Avenir Next', 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #5e554a;
+  background:
+    radial-gradient(circle at top, #fff7eb 0%, #f7efe5 34%, #efe2d0 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --heading: #24190f;
+  --muted: #776a5d;
+  --accent: #c45418;
+  --panel: rgba(255, 252, 247, 0.84);
+  --soft: rgba(243, 231, 219, 0.68);
+  --border: rgba(103, 73, 41, 0.14);
+  --shadow:
+    0 30px 60px rgba(76, 49, 24, 0.08),
+    0 10px 24px rgba(76, 49, 24, 0.05);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  appearance: none;
+}
+
+img {
+  max-width: 100%;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--heading);
+  font-family:
+    'Clash Display', 'Plus Jakarta Sans', 'Avenir Next', sans-serif;
+}
+
+h1 {
+  font-size: clamp(2.3rem, 4vw, 4.6rem);
+  line-height: 0.97;
+  letter-spacing: -0.05em;
+  max-width: 11ch;
+  margin-bottom: 16px;
+}
+
+h2 {
+  font-size: clamp(1.2rem, 2vw, 1.8rem);
+  line-height: 1.05;
+}
+
+a {
+  color: inherit;
+}
