@@ -56,6 +56,10 @@
   display: none;
 }
 
+.hidden-input {
+  display: none;
+}
+
 .primary-button,
 .secondary-button,
 .chip-button {
@@ -365,6 +369,13 @@
   max-width: none;
   user-select: none;
   pointer-events: none;
+}
+
+.preview-background {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .zoom-toolbar {

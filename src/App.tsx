@@ -17,6 +17,10 @@ type ImageItem = {
   name: string
   naturalWidth: number
   naturalHeight: number
+  backgroundSrc: string | null
+  backgroundName: string | null
+  backgroundWidth: number | null
+  backgroundHeight: number | null
   size: PresetSize
   zoom: number
   offsetX: number
@@ -62,13 +66,26 @@ const exportImage = async (
   format: ExportFormat,
   quality: number,
 ) => {
+  const backgroundSrc = item.backgroundSrc
+  const backgroundImage = backgroundSrc ? new Image() : null
   const image = new Image()
+  if (backgroundImage && backgroundSrc) {
+    backgroundImage.src = backgroundSrc
+  }
   image.src = item.src
 
-  await new Promise<void>((resolve, reject) => {
-    image.onload = () => resolve()
-    image.onerror = () => reject(new Error(`Failed to render ${item.name}`))
-  })
+  await Promise.all([
+    new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new Error(`Failed to render ${item.name}`))
+    }),
+    backgroundImage
+      ? new Promise<void>((resolve, reject) => {
+          backgroundImage.onload = () => resolve()
+          backgroundImage.onerror = () => reject(new Error('Failed to render background image'))
+        })
+      : Promise.resolve(),
+  ])
 
   const canvas = document.createElement('canvas')
   canvas.width = item.size
@@ -96,6 +113,25 @@ const exportImage = async (
   } else {
     ctx.clearRect(0, 0, item.size, item.size)
   }
+
+  if (backgroundImage) {
+    const backgroundScale = Math.max(
+      item.size / backgroundImage.width,
+      item.size / backgroundImage.height,
+    )
+    const backgroundWidth = backgroundImage.width * backgroundScale
+    const backgroundHeight = backgroundImage.height * backgroundScale
+    const backgroundX = (item.size - backgroundWidth) / 2
+    const backgroundY = (item.size - backgroundHeight) / 2
+    ctx.drawImage(
+      backgroundImage,
+      backgroundX,
+      backgroundY,
+      backgroundWidth,
+      backgroundHeight,
+    )
+  }
+
   ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight)
 
   const mimeType =
@@ -117,6 +153,7 @@ function App() {
   const [error, setError] = useState<string>('')
   const itemsRef = useRef<ImageItem[]>([])
   const previewFrameRef = useRef<HTMLDivElement | null>(null)
+  const backgroundInputRef = useRef<HTMLInputElement | null>(null)
   const dragStateRef = useRef<{
     pointerId: number
     startX: number
@@ -127,6 +164,7 @@ function App() {
     travelX: number
     travelY: number
   } | null>(null)
+  const [backgroundTargetId, setBackgroundTargetId] = useState<string | null>(null)
   const selectedItem = items.find((item) => item.id === selectedId) ?? items[0] ?? null
 
   useEffect(() => {
@@ -135,7 +173,12 @@ function App() {
 
   useEffect(() => {
     return () => {
-      itemsRef.current.forEach((item) => URL.revokeObjectURL(item.src))
+      itemsRef.current.forEach((item) => {
+        URL.revokeObjectURL(item.src)
+        if (item.backgroundSrc) {
+          URL.revokeObjectURL(item.backgroundSrc)
+        }
+      })
     }
   }, [])
 
@@ -174,6 +217,10 @@ function App() {
             name: file.name,
             naturalWidth: dimensions.width,
             naturalHeight: dimensions.height,
+            backgroundSrc: null,
+            backgroundName: null,
+            backgroundWidth: null,
+            backgroundHeight: null,
             size: 1024,
             zoom: 1,
             offsetX: 0,
@@ -183,7 +230,12 @@ function App() {
       )
 
       setItems((current) => {
-        current.forEach((item) => URL.revokeObjectURL(item.src))
+        current.forEach((item) => {
+          URL.revokeObjectURL(item.src)
+          if (item.backgroundSrc) {
+            URL.revokeObjectURL(item.backgroundSrc)
+          }
+        })
         return nextItems
       })
       setSelectedId(nextItems[0]?.id ?? null)
@@ -208,6 +260,9 @@ function App() {
       const target = current.find((item) => item.id === id)
       if (target) {
         URL.revokeObjectURL(target.src)
+        if (target.backgroundSrc) {
+          URL.revokeObjectURL(target.backgroundSrc)
+        }
       }
 
       const nextItems = current.filter((item) => item.id !== id)
@@ -215,6 +270,70 @@ function App() {
         selectedId === id ? (nextItems[0]?.id ?? null) : selectedId
       setSelectedId(nextSelectedId)
       return nextItems
+    })
+  }
+
+  const openBackgroundPicker = (id: string) => {
+    setBackgroundTargetId(id)
+    backgroundInputRef.current?.click()
+  }
+
+  const handleBackgroundFileChange = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0]
+    const targetId = backgroundTargetId
+
+    if (!file || !targetId) {
+      return
+    }
+
+    setError('')
+
+    try {
+      const src = URL.createObjectURL(file)
+      const dimensions = await readImageDimensions(src)
+
+      setItems((current) =>
+        current.map((item) => {
+          if (item.id !== targetId) {
+            return item
+          }
+
+          if (item.backgroundSrc) {
+            URL.revokeObjectURL(item.backgroundSrc)
+          }
+
+          return {
+            ...item,
+            backgroundSrc: src,
+            backgroundName: file.name,
+            backgroundWidth: dimensions.width,
+            backgroundHeight: dimensions.height,
+          }
+        }),
+      )
+    } catch {
+      setError('The background image could not be loaded.')
+    } finally {
+      setBackgroundTargetId(null)
+      event.target.value = ''
+    }
+  }
+
+  const removeBackground = (id: string) => {
+    updateItem(id, (item) => {
+      if (item.backgroundSrc) {
+        URL.revokeObjectURL(item.backgroundSrc)
+      }
+
+      return {
+        ...item,
+        backgroundSrc: null,
+        backgroundName: null,
+        backgroundWidth: null,
+        backgroundHeight: null,
+      }
     })
   }
 
@@ -341,6 +460,13 @@ function App() {
           />
           <p className="helper-text">You can import up to 10 photos at once.</p>
         </div>
+        <input
+          ref={backgroundInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden-input"
+          onChange={handleBackgroundFileChange}
+        />
       </section>
 
       <section className="toolbar">
@@ -482,6 +608,13 @@ function App() {
                     height: previewFrameSize,
                   }}
                 >
+                  {selectedItem.backgroundSrc ? (
+                    <img
+                      className="preview-background"
+                      src={selectedItem.backgroundSrc}
+                      alt=""
+                    />
+                  ) : null}
                   <img
                     src={selectedItem.src}
                     alt={selectedItem.name}
@@ -509,6 +642,33 @@ function App() {
               </div>
 
               <div className="controls-panel">
+                <div className="control-group">
+                  <h3>Background image</h3>
+                  <div className="action-row">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => openBackgroundPicker(selectedItem.id)}
+                    >
+                      {selectedItem.backgroundSrc ? 'Replace background' : 'Add background'}
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled={!selectedItem.backgroundSrc}
+                      onClick={() => removeBackground(selectedItem.id)}
+                    >
+                      Remove background
+                    </button>
+                  </div>
+                  <p className="gesture-note">
+                    Add a background image behind transparent PNGs before export.
+                    {selectedItem.backgroundName
+                      ? ` Current background: ${selectedItem.backgroundName}.`
+                      : ' No background added yet.'}
+                  </p>
+                </div>
+
                 <div className="control-group">
                   <h3>Square size</h3>
                   <div className="chip-row">
