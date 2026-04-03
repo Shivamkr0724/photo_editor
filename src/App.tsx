@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ChangeEvent, PointerEvent, WheelEvent } from 'react'
+import type { ChangeEvent, PointerEvent } from 'react'
 import './App.css'
 
 const SIZE_OPTIONS = [1024, 384, 96] as const
@@ -425,14 +425,27 @@ function App() {
     }
   }
 
-  const handlePreviewWheel = (event: WheelEvent<HTMLDivElement>) => {
-    if (!selectedItem) {
-      return
+  // Native wheel listener (passive: false) so we can call preventDefault()
+  // and block the page from scrolling while the cursor is over the preview.
+  useEffect(() => {
+    const frame = previewFrameRef.current
+    if (!frame) return
+
+    const onWheel = (event: globalThis.WheelEvent) => {
+      // itemsRef keeps the latest items without stale closure issues
+      const current = itemsRef.current
+      const active = current.find((i) => i.id === selectedId) ?? current[0] ?? null
+      if (!active) return
+
+      event.preventDefault()
+      adjustZoom(active.id, event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP)
     }
 
-    event.preventDefault()
-    adjustZoom(selectedItem.id, event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP)
-  }
+    frame.addEventListener('wheel', onWheel, { passive: false })
+    return () => frame.removeEventListener('wheel', onWheel)
+  // Re-run whenever selectedId changes so we always zoom the right image
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId])
 
   return (
     <main className="app-shell">
@@ -602,7 +615,6 @@ function App() {
                   onPointerMove={handlePreviewPointerMove}
                   onPointerUp={handlePreviewPointerUp}
                   onPointerCancel={handlePreviewPointerUp}
-                  onWheel={handlePreviewWheel}
                   style={{
                     width: previewFrameSize,
                     height: previewFrameSize,
